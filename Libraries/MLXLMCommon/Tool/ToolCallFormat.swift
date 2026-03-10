@@ -25,6 +25,30 @@ public protocol ToolCallParser: Sendable {
     ///   - tools: Optional tool schemas for type-aware parsing
     /// - Returns: A `ToolCall` if parsing succeeds, `nil` otherwise
     func parse(content: String, tools: [[String: any Sendable]]?) -> ToolCall?
+
+    /// Parse remaining buffered content at end-of-sequence.
+    ///
+    /// Called when generation ends to extract any tool calls still in the buffer.
+    /// The default implementation splits on `startTag` (if present) and parses
+    /// each segment individually.
+    func parseEOS(_ toolCallBuffer: String, tools: [[String: any Sendable]]?) -> [ToolCall]
+}
+
+extension ToolCallParser {
+    public func parseEOS(_ toolCallBuffer: String, tools: [[String: any Sendable]]?) -> [ToolCall] {
+        if let startTag {
+            return
+                toolCallBuffer
+                .components(separatedBy: startTag)
+                .filter { !$0.isEmpty }
+                .compactMap { parse(content: $0, tools: tools) }
+        } else {
+            guard let toolCall = parse(content: toolCallBuffer, tools: tools) else {
+                return []
+            }
+            return [toolCall]
+        }
+    }
 }
 
 // MARK: - ToolCallFormat Enum
@@ -70,6 +94,10 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     /// Example: `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
     case qwen35 = "qwen3_5"
 
+    /// Mistral V11+ format with [TOOL_CALLS] and [ARGS] delimiters.
+    /// Example: `[TOOL_CALLS]get_weather [ARGS]{"location": "Tokyo"}`
+    case mistral
+
     // MARK: - Factory Methods
 
     /// Create the appropriate parser for this format.
@@ -93,6 +121,8 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return MiniMaxM2ToolCallParser()
         case .qwen35:
             return XMLFunctionParser(startTag: "<tool_call>", endTag: "</tool_call>")
+        case .mistral:
+            return MistralToolCallParser()
         }
     }
 
@@ -124,6 +154,11 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // Qwen3.5 family (qwen3_5, qwen3_5_moe, etc.)
         if type.hasPrefix("qwen3_5") {
             return .qwen35
+        }
+
+        // Mistral3 family (mistral3, mistral3_text, etc.)
+        if type.hasPrefix("mistral3") {
+            return .mistral
         }
 
         return nil
